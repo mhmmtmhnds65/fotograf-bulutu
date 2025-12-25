@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Panel V3.1 (Düzeltildi)</title>
+    <style>
+        body { font-family: sans-serif; background: #eee; padding: 10px; }
+        .box { background: white; padding: 15px; border-radius: 10px; max-width: 400px; margin: 0 auto; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #333; margin-top: 0; }
+        input { width: 100%; padding: 10px; margin-bottom: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; }
+        input[type="file"] { background: #f0f0f0; padding: 15px; }
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 5px; color: white; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 5px; }
+        .btn-green { background-color: #28a745; }
+        .btn-gray { background-color: #6c757d; }
+        #console { background: #000; color: #0f0; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 12px; height: 200px; overflow-y: auto; margin-top: 15px; }
+        .log-err { color: #ff5555; }
+        .log-warn { color: #ffaa00; }
+    </style>
+</head>
+<body>
+
+<div class="box">
+    <h2>🛠️ Panel V3.1 (Terslik Düzeltildi)</h2>
+    
+    <label>GitHub Token:</label>
+    <input type="password" id="token" placeholder="ghp_...">
+    
+    <label>Repo Adı:</label>
+    <input type="text" id="repo" value="mhmmtmhnds65/fotograf-bulutu">
+    
+    <hr>
+    
+    <label style="font-weight:bold; color:red;">1. ADIM: Dosyaları Seç</label>
+    <input type="file" id="fileInput" multiple accept="image/*">
+    
+    <label style="font-weight:bold; color:green;">2. ADIM: Yüklemeyi Başlat</label>
+    <button class="btn btn-green" onclick="baslat()">🚀 YÜKLE VE GÖNDER</button>
+    
+    <button class="btn btn-gray" onclick="location.reload()">🔄 Sayfayı Yenile</button>
+    
+    <div id="console">Hazır...</div>
+</div>
+
+<script>
+    window.onerror = function(msg, url, line) { log(`SİSTEM HATASI: ${msg} (Satır: ${line})`, 'err'); return false; };
+    const savedToken = localStorage.getItem("gh_token");
+    if(savedToken) document.getElementById("token").value = savedToken;
+
+    function log(msg, type='') {
+        const c = document.getElementById("console");
+        const span = document.createElement("div");
+        if(type === 'err') span.className = 'log-err';
+        if(type === 'warn') span.className = 'log-warn';
+        span.innerText = "> " + msg;
+        c.prepend(span);
+    }
+
+    async function baslat() {
+        const files = document.getElementById('fileInput').files;
+        const token = document.getElementById("token").value.trim();
+        const repo = document.getElementById("repo").value.trim();
+        
+        if (!token) { log("HATA: Token boş!", 'err'); return; }
+        if (files.length === 0) { log("UYARI: Hiç dosya seçmedin!", 'warn'); return; }
+
+        localStorage.setItem("gh_token", token);
+        log("İşlem başlatılıyor...");
+
+        try {
+            let index = 0; let shaIndex = null;
+            log("GitHub'a bağlanılıyor...");
+            try {
+                const resp = await fetch(`https://api.github.com/repos/${repo}/contents/index.txt`, { headers: { "Authorization": `token ${token}` } });
+                if (resp.ok) { const data = await resp.json(); index = parseInt(atob(data.content)); shaIndex = data.sha; log(`Mevcut Sayaç: ${index}`); }
+                else { log("Index yok, 0 kabul ediliyor.", 'warn'); }
+            } catch (e) { log("Index okuma hatası, devam ediliyor."); }
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                log(`İşleniyor (Döndürülüyor): ${file.name}...`);
+                try {
+                    const bmpData = await processImage(file);
+                    index++;
+                    const filename = `test${index}.bmp`;
+                    const put = await fetch(`https://api.github.com/repos/${repo}/contents/${filename}`, {
+                        method: "PUT", headers: { "Authorization": `token ${token}`, "Content-Type": "application/json" },
+                        body: JSON.stringify({ message: "V3.1 Upload", content: arrayBufferToBase64(bmpData) })
+                    });
+                    if(put.ok) log(`✅ ${filename} Yüklendi!`); else log(`❌ Yükleme başarısız: ${put.status}`, 'err');
+                } catch (e) { log(`HATA (${file.name}): ${e.message}`, 'err'); index--; }
+            }
+
+            log("Index güncelleniyor...");
+            const body = { message: "Index update", content: btoa(index.toString()) };
+            if (shaIndex) body.sha = shaIndex;
+            await fetch(`https://api.github.com/repos/${repo}/contents/index.txt`, { method: "PUT", headers: { "Authorization": `token ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            log("🎉 BİTTİ! HEPSİ TAMAM.");
+        } catch (e) { log(`GENEL HATA: ${e.message}`, 'err'); }
+    }
+
+    function processImage(file) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement("canvas"); canvas.width = 240; canvas.height = 240;
+                const ctx = canvas.getContext("2d");
+                const min = Math.min(img.width, img.height);
+                ctx.drawImage(img, (img.width-min)/2, (img.height-min)/2, min, min, 0, 0, 240, 240);
+                resolve(encodeBMP(ctx.getImageData(0,0,240,240)));
+            };
+            img.onerror = () => reject(new Error("Resim açılamadı")); img.src = URL.createObjectURL(file);
+        });
+    }
+
+    function encodeBMP(imgData) {
+        const w = 240, h = 240;
+        const fileSize = 54 + (w*3*h);
+        const buf = new ArrayBuffer(fileSize);
+        const view = new DataView(buf);
+        
+        // Header (Standart BMP - Alttan Üste)
+        view.setUint8(0, 0x42); view.setUint8(1, 0x4D);
+        view.setUint32(2, fileSize, true);
+        view.setUint32(10, 54, true);
+        view.setUint32(14, 40, true);
+        view.setInt32(18, w, true);
+        view.setInt32(22, h, true); // Pozitif yükseklik (Alttan üste)
+        view.setUint16(26, 1, true); view.setUint16(28, 24, true);
+        
+        // Piksel Verisi - TERSTEN YAZMA DÖNGÜSÜ
+        let p = 54;
+        // En alt satırdan başla, yukarı çık (y--)
+        for (let y = h - 1; y >= 0; y--) {
+            for (let x = 0; x < w; x++) {
+                const i = (y * w + x) * 4; // Canvas'taki doğru pikseli bul
+                view.setUint8(p++, imgData.data[i+2]); // B
+                view.setUint8(p++, imgData.data[i+1]); // G
+                view.setUint8(p++, imgData.data[i]);   // R
+            }
+        }
+        return buf;
+    }
+
+    function arrayBufferToBase64(buffer) {
+        let binary = ''; const bytes = new Uint8Array(buffer);
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        return window.btoa(binary);
+    }
+</script>
+</body>
+</html>
